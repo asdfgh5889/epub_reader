@@ -1,7 +1,17 @@
+import 'dart:convert';
+import 'package:epub/epub.dart';
+import 'package:epub_reader_example/widget_deck.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
+import 'package:flutter/rendering.dart';
+import 'dart:io' as io;
+import 'package:webview_flutter/webview_flutter.dart';
 
-void main() => runApp(MyApp());
+void main() {
+  runApp(MyApp());
+}
 
 class MyApp extends StatelessWidget {
   @override
@@ -16,23 +26,11 @@ class MyApp extends StatelessWidget {
   }
 }
 
-abstract class WidgetDeckDataSource {
-  int numberOfItems();
-  Widget itemAt(int index);
-}
-
-enum DeckDirection {
-  next,
-  previous,
-  neutralPrev,
-  neutralNext
-}
-
-class DeckOffset {
-  final DeckDirection direction;
-  final double value;
-
-  DeckOffset(this.direction, this.value);
+class EpubPage {
+  final Key key;
+  final Widget view;
+  WebViewController controller;
+  EpubPage({this.key, this.view});
 }
 
 class MyHomePage extends StatefulWidget {
@@ -40,238 +38,18 @@ class MyHomePage extends StatefulWidget {
   _MyHomePageState createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage>
-    with TickerProviderStateMixin implements WidgetDeckDataSource {
-  double _topOffset = 0;
-  double _width = 300;
-  double _previousOffset = 0;
-  int _top = 0;
-
-  DeckDirection _currentDirection;
-  WidgetDeckDataSource _dataSource;
-  AnimationController _dragController;
-  Animation _dragAnimation;
-  List<Color> _colors = List();
+class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource {
+  EpubBook epubBook;
+  Map<DeckItemType, DeckItem> epubPages = Map();
+  Map<Key, WebViewController> controllers = Map();
+  Map<DeckItemType, Key> pageKeys = Map();
 
   @override
   void initState() {
     super.initState();
-    _dataSource = this;
-
-    _colors.add(Colors.amber);
-    for (int i = 0; i < this._dataSource.numberOfItems() - 1; i++) {
-      _colors.add(Color((math.Random().nextDouble() * 0xFFFFFF).toInt() << 0).withOpacity(1.0));
-    }
-
-    resetOffsets();
-  }
-
-  Widget buildSwiper({Key key, Widget child}) {
-    return Positioned(
-        key: key,
-        left: this._topOffset,
-        child: GestureDetector(
-          onHorizontalDragUpdate: (drag) {
-            setState(() {
-              switch (this._currentDirection) {
-                case DeckDirection.next:
-                  final offset = this._topOffset + drag.delta.dx;
-                  if (offset <= 0 && offset >= -this._width) {
-                    this._topOffset = offset;
-                  } else if (offset > 0) {
-                    this._topOffset = 0;
-                  } else if (offset < -300) {
-                    this._topOffset = -this._width;
-                  }
-                  break;
-                case DeckDirection.previous:
-                  final offset = this._previousOffset + drag.delta.dx;
-                  if (offset <= 0 && offset >= -this._width) {
-                    this._previousOffset = offset;
-                  } else if (offset > 0) {
-                    this._previousOffset = 0;
-                  } else if (offset < -300) {
-                    this._previousOffset = -this._width;
-                  }
-                  break;
-                default:
-                  if (drag.delta.dx < 0 && this._top != this._dataSource.numberOfItems() - 1) {
-                    this._currentDirection = DeckDirection.next;
-                  } else if (this._top != 0){
-                    this._currentDirection = DeckDirection.previous;
-                  }
-              }
-            });
-          },
-          onHorizontalDragEnd: (dragEnd) {
-            if (this._topOffset < 0) {
-              initPageAnimation(
-                width: this._width,
-                leftOffset: this._topOffset,
-                direction: this._topOffset.abs() / this._width > 0.25
-                      ? DeckDirection.next : DeckDirection.neutralNext
-              );
-            } else {
-              initPageAnimation(
-                width: this._width,
-                leftOffset: this._previousOffset,
-                direction: (this._width - this._previousOffset.abs()) / this._width > 0.25
-                    ? DeckDirection.previous : DeckDirection.neutralPrev
-              );
-            }
-
-            this._currentDirection = null;
-            this._dragController.forward(from: 0);
-          },
-          child: child
-        )
-    );
-  }
-
-  AnimationController initPageAnimation({
-    double width,
-    double leftOffset,
-    DeckDirection direction,
-    double velocityX = 450,
-  }) {
-    double distance = 0;
-    switch (direction) {
-      case DeckDirection.next:
-      case DeckDirection.neutralPrev:
-        distance = width - leftOffset.abs();
-        break;
-      case DeckDirection.previous:
-      case DeckDirection.neutralNext:
-        distance = leftOffset;
-        break;
-    }
-
-    return initBaseAnimation(
-      duration: Duration(milliseconds: (distance/velocityX * 1000).abs().round()),
-      listener: (value) {
-        double offset = 0;
-
-        switch (direction) {
-          case DeckDirection.next:
-          case DeckDirection.neutralPrev:
-            offset = leftOffset - (width + leftOffset) * value;
-            break;
-          case DeckDirection.previous:
-          case DeckDirection.neutralNext:
-            offset = leftOffset * (1 - value);
-            break;
-        }
-
-        return DeckOffset(direction, offset);
-      },
-      completion: (status) {
-        if (direction == DeckDirection.previous) {
-          return getPrevious();
-        } else if (direction == DeckDirection.next) {
-          return getNext();
-        }
-
-        return null;
-      }
-    );
-  }
-
-  AnimationController initBaseAnimation({
-    Duration duration,
-    DeckOffset Function(double value) listener,
-    int Function(AnimationStatus) completion
-  }) {
-    if(this._dragController != null) {
-      this._dragController.stop();
-      this._dragController.dispose();
-    }
-
-    this._dragController = AnimationController(
-        vsync: this,
-        duration: duration
-    );
-
-    this._dragAnimation = Tween<double>(
-        begin: 0,
-        end: 1
-    ).animate(CurvedAnimation(
-        curve: Curves.easeOutExpo,
-        parent: this._dragController
-    ))..addListener(() {
-      final result = listener(this._dragAnimation.value);
-
-      setState(() {
-        switch (result.direction) {
-          case DeckDirection.next:
-          case DeckDirection.neutralNext:
-            this._topOffset = result.value;
-            break;
-          case DeckDirection.previous:
-          case DeckDirection.neutralPrev:
-            this._previousOffset = result.value;
-            break;
-        }
-      });
-    })..addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
-        final result = completion(status);
-        if (result != null) {
-          setState(() {
-            this._top = result;
-            resetOffsets();
-          });
-        }
-      }
-    });
-
-    return this._dragController;
-  }
-
-  void resetOffsets() {
-    this._currentDirection = null;
-    this._topOffset = 0;
-    this._previousOffset = -this._width;
-  }
-
-  int getNext() {
-    if (this._top != this._dataSource.numberOfItems() - 1)
-      return this._top += 1;
-
-    return this._top;
-  }
-
-  int getPrevious() {
-    if (this._top != 0)
-      return this._top -= 1;
-
-    return this._top;
-  }
-
-  Widget buildPrevious({Widget child}) {
-    return Positioned(
-      left: this._previousOffset,
-      child: child
-    );
-  }
-
-  List<Widget> buildStackChildren() {
-    List<Widget> children = List();
-    final last = this._dataSource.numberOfItems() - 1;
-    if (this._top < last) {
-      children.add(this._dataSource.itemAt(this._top + 1));
-    }
-
-    children.add(
-      buildSwiper(child: this._dataSource.itemAt(this._top))
-    );
-
-    if (this._top != 0) {
-      children.add(
-        buildPrevious(child: this._dataSource.itemAt(this._top - 1))
-      );
-    }
-
-    return children;
+    this.pageKeys[DeckItemType.next] = UniqueKey();
+    this.pageKeys[DeckItemType.top] = UniqueKey();
+    this.pageKeys[DeckItemType.previous] = UniqueKey();
   }
 
   @override
@@ -279,52 +57,144 @@ class _MyHomePageState extends State<MyHomePage>
     return Scaffold(
       appBar: AppBar(
         title: Text("Demo"),
+        actions: <Widget>[
+          FlatButton(
+            onPressed: () async {
+              final path = await FilePicker.getFilePath(type: FileType.CUSTOM, fileExtension: 'epub');
+              if (path != null) {
+                final file = io.File(path);
+                List<int> bytes = await file.readAsBytes();
+                this.epubBook = await EpubReader.readBook(bytes);
+                setState(() {});
+              }
+            },
+            child: Text("Open", style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
       body: Container(
         alignment: Alignment.center,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Container(
-              height: 400,
-              width: this._width,
-              color: Colors.black12,
-              child: Stack(
-                overflow: Overflow.clip,
-                children: buildStackChildren(),
-              ),
-            ),
-            SizedBox(height: 30,),
-            RaisedButton(
-              onPressed: () {
-                setState(() {
-                  this._top = 0;
-                  resetOffsets();
-                });
-              },
-              child: Text("Reset", style: TextStyle(color: Colors.white),),
-              color: Colors.blue,
-            )
-          ],
+        child: WidgetDeck(
+          key: Key("epub_deck"),
+          dataSource: this
         ),
       )
     );
   }
 
+  Future<void> loadChapterContent(int index, WebViewController controller) async {
+    if (controller != null) {
+      await controller.loadUrl(getContentUriFor(index))
+          .catchError((error) {
+            print(error);
+          });
+    }
+    return;
+  }
+
+
+  String getContentUriFor(int index) {
+    if (index < 0 || index >= numberOfItems()) {
+      return 'about:blank';
+    }
+
+    return Uri.dataFromString(
+        this.epubBook.Chapters[index].HtmlContent,
+        mimeType: 'text/html',
+        encoding: Encoding.getByName('utf-8')
+    ).toString();
+  }
+
   @override
-  Widget itemAt(int index) {
-    return Container(
-      height: 400,
-      width: 300,
-      color: this._colors[index],
-      alignment: Alignment.center,
-      child: Text(index.toString(), style: TextStyle(color: Colors.white, fontSize: 30)),
-    );
+  DeckItem itemAt(int index, BoxConstraints constraints, DeckItemType type, bool isCaching) {
+    if (this.epubPages[type] == null) {
+      print("WebView Creating");
+      final key = UniqueKey();
+      this.epubPages[type] = DeckItem(
+        key: key,
+        child: Container(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+              border: Border.all(color: Colors.black)
+          ),
+          child: WebView(
+            initialUrl: getContentUriFor(index),
+            gestureRecognizers: Set()..add(Factory<PlatformViewVerticalGestureRecognizer>(
+                () => PlatformViewVerticalGestureRecognizer()
+            )),
+            onWebViewCreated: (WebViewController controller) {
+              this.controllers[key] = controller;
+              print("WebView Controller Created");
+            },
+          ),
+        ),
+      );
+    } else if (isCaching && (type == DeckItemType.next || type == DeckItemType.previous)) {
+      loadChapterContent(index, this.controllers[this.epubPages[type].key]);
+    }
+
+    return this.epubPages[type];
   }
 
   @override
   int numberOfItems() {
-    return 6;
+    return this.epubBook == null ? 0 : this.epubBook.Chapters.length;
+  }
+
+  @override
+  void prepareCache(DeckDirection direction, int top) {
+    if (direction == DeckDirection.next) {
+      final prev = this.epubPages[DeckItemType.previous];
+      this.epubPages[DeckItemType.previous] =
+      this.epubPages[DeckItemType.top];
+      this.epubPages[DeckItemType.top] = this.epubPages[DeckItemType.next];
+      this.epubPages[DeckItemType.next] = prev;
+    } else if (direction == DeckDirection.previous) {
+      final next = this.epubPages[DeckItemType.next];
+      this.epubPages[DeckItemType.next] = this.epubPages[DeckItemType.top];
+      this.epubPages[DeckItemType.top] =
+      this.epubPages[DeckItemType.previous];
+      this.epubPages[DeckItemType.previous] = next;
+    }
   }
 }
 
+class PlatformViewVerticalGestureRecognizer
+    extends VerticalDragGestureRecognizer {
+  PlatformViewVerticalGestureRecognizer({PointerDeviceKind kind})
+      : super(kind: kind);
+
+  Offset _dragDistance = Offset.zero;
+
+  @override
+  void addPointer(PointerEvent event) {
+    startTrackingPointer(event.pointer);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    _dragDistance = _dragDistance + event.delta;
+    if (event is PointerMoveEvent) {
+      final double dy = _dragDistance.dy.abs();
+      final double dx = _dragDistance.dx.abs();
+
+      if (dy > dx && dy > kTouchSlop) {
+        // vertical drag - accept
+        resolve(GestureDisposition.accepted);
+        _dragDistance = Offset.zero;
+      } else if (dx > kTouchSlop && dx > dy) {
+        // horizontal drag - stop tracking
+        stopTrackingPointer(event.pointer);
+        _dragDistance = Offset.zero;
+      }
+    }
+  }
+
+  @override
+  String get debugDescription => 'horizontal drag (platform view)';
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {}
+}
