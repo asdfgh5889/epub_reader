@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:epub/epub.dart';
+import 'package:epub_reader_example/content_server.dart';
 import 'package:epub_reader_example/widget_deck.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -7,7 +8,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:io' as io;
-import 'package:webview_flutter/webview_flutter.dart';
+
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 void main() {
   runApp(MyApp());
@@ -26,13 +28,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class EpubPage {
-  final Key key;
-  final Widget view;
-  WebViewController controller;
-  EpubPage({this.key, this.view});
-}
-
 class MyHomePage extends StatefulWidget {
   @override
   _MyHomePageState createState() => _MyHomePageState();
@@ -41,7 +36,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource {
   EpubBook epubBook;
   Map<DeckItemType, DeckItem> epubPages = Map();
-  Map<Key, WebViewController> controllers = Map();
+  Map<Key, InAppWebViewController> controllers = Map();
   Map<DeckItemType, Key> pageKeys = Map();
 
   @override
@@ -65,6 +60,7 @@ class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource
                 final file = io.File(path);
                 List<int> bytes = await file.readAsBytes();
                 this.epubBook = await EpubReader.readBook(bytes);
+                startWebServerFor(this.epubBook);
                 setState(() {});
               }
             },
@@ -82,9 +78,9 @@ class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource
     );
   }
 
-  Future<void> loadChapterContent(int index, WebViewController controller) async {
+  Future<void> loadChapterContent(int index, InAppWebViewController controller) async {
     if (controller != null) {
-      await controller.loadUrl(getContentUriFor(index))
+      await controller.loadUrl(url: getContentUriFor(index))
           .catchError((error) {
             print(error);
           });
@@ -92,17 +88,17 @@ class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource
     return;
   }
 
-
   String getContentUriFor(int index) {
     if (index < 0 || index >= numberOfItems()) {
       return 'about:blank';
     }
 
-    return Uri.dataFromString(
-        this.epubBook.Chapters[index].HtmlContent,
-        mimeType: 'text/html',
-        encoding: Encoding.getByName('utf-8')
-    ).toString();
+    final spineItem = this.epubBook.Schema.Package.Spine.Items[index];
+    final manifestItems = this.epubBook.Schema.Package.Manifest.Items;
+    final item = manifestItems.firstWhere((e) {
+      return e.Id == spineItem.IdRef;
+    });
+    return Uri(host: 'localhost', path: item.Href, port: 8000, scheme: 'http').toString();
   }
 
   @override
@@ -119,12 +115,20 @@ class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource
           decoration: BoxDecoration(
               border: Border.all(color: Colors.black)
           ),
-          child: WebView(
+          child: InAppWebView(
             initialUrl: getContentUriFor(index),
-            gestureRecognizers: Set()..add(Factory<PlatformViewVerticalGestureRecognizer>(
-                () => PlatformViewVerticalGestureRecognizer()
-            )),
-            onWebViewCreated: (WebViewController controller) {
+            initialOptions: InAppWebViewWidgetOptions(
+              crossPlatform: InAppWebViewOptions(
+                javaScriptEnabled: true,
+                debuggingEnabled: true
+              )
+            ),
+            onLoadStart: this.onLoadStart,
+            onLoadStop: this.onLoadStop,
+            gestureRecognizers: Set()
+              ..add(Factory<PlatformViewVerticalGestureRecognizer>(() => PlatformViewVerticalGestureRecognizer()))
+              ..add(Factory<HorizontalDragGestureRecognizer>(() => HorizontalDragGestureRecognizer())),
+            onWebViewCreated: (InAppWebViewController controller) {
               this.controllers[key] = controller;
               print("WebView Controller Created");
             },
@@ -138,9 +142,20 @@ class _MyHomePageState extends State<MyHomePage> implements WidgetDeckDataSource
     return this.epubPages[type];
   }
 
+  Future<void> onLoadStart(InAppWebViewController controller, String url) async {
+    return;
+  }
+
+  Future<void> onLoadStop(InAppWebViewController controller, String url) async {
+    await controller.injectCSSCode(
+        source: 'body {background-color: white !important; padding: 10px !important;} img { max-width: 100% !important; height: auto !important}'
+    );
+    return;
+  }
+
   @override
   int numberOfItems() {
-    return this.epubBook == null ? 0 : this.epubBook.Chapters.length;
+    return this.epubBook == null ? 0 : this.epubBook.Schema.Package.Spine.Items.length;
   }
 
   @override
