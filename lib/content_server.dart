@@ -17,7 +17,7 @@ Future startWebServerFor(EpubBook book) async {
         print('Server running at host: ${server.address}');
         server.transform(HttpBodyHandler()).listen((
             HttpRequestBody body) async {
-          print('Request URI: ${body.request.uri.path}');
+          //print('Request URI: ${body.request.uri.path}');
           final result = _openedBook != null ? getContentFor(body.request, _openedBook) : null;
           if (result != null) {
             body.request.response.statusCode = 200;
@@ -31,7 +31,7 @@ Future startWebServerFor(EpubBook book) async {
             }
             body.request.response.close();
           } else {
-            print('Not found');
+            //print('Not found');
             body.request.response.statusCode = 404;
             body.request.response.write('Not found');
             body.request.response.close();

@@ -7,6 +7,7 @@ abstract class WidgetDeckDataSource {
   int numberOfItems();
   DeckItem itemAt(int index, BoxConstraints constraints, DeckItemType type, bool isCaching);
   void prepareCache(DeckDirection direction, int top);
+  bool isEnd(int index);
 }
 
 enum DeckDirection {
@@ -46,6 +47,7 @@ class WidgetDeck extends StatefulWidget {
 class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
   double _topOffset = 0;
   int _top = 0;
+  bool isCaching = false;
 
   DeckDirection _currentDirection;
   WidgetDeckDataSource _dataSource;
@@ -64,8 +66,7 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
       behavior: HitTestBehavior.translucent,
         onHorizontalDragUpdate: (drag) {
           if (this._currentDirection == null) {
-            if (drag.delta.dx < 0 &&
-                this._top != this._dataSource.numberOfItems() - 1) {
+            if (drag.delta.dx < 0 && !this._dataSource.isEnd(this._top)) {
               this._currentDirection = DeckDirection.next;
               this._topOffset = 0;
             } else if (this._top != 0) {
@@ -92,6 +93,7 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
           final neutralDirection = this._currentDirection == DeckDirection.next
               ? DeckDirection.neutralNext : DeckDirection.neutralPrev;
           final direction = threshold ? this._currentDirection : neutralDirection ;
+          this._currentDirection = direction;
 
           initPageAnimation(
               width: constraints.maxWidth,
@@ -195,19 +197,22 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
   }
 
   void resetOffsets() {
+    this.isCaching = this._currentDirection == DeckDirection.next ||
+        this._currentDirection == DeckDirection.previous;
+
     this._currentDirection = null;
   }
 
   int getNext() {
-    if (this._top != this._dataSource.numberOfItems() - 1)
-      return this._top += 1;
+    if (!this._dataSource.isEnd(this._top))
+      return this._top + 1;
 
     return this._top;
   }
 
   int getPrevious() {
     if (this._top != 0)
-      return this._top -= 1;
+      return this._top - 1;
 
     return this._top;
   }
@@ -223,13 +228,11 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
 
   List<Widget> buildStackChildren(BoxConstraints constraints) {
     List<Widget> children = List();
-    //final last = this._dataSource.numberOfItems() - 1;
-
     final deckItemNext = this._dataSource.itemAt(
-        this._top + 1,
+        getNext(),
         constraints,
         DeckItemType.next,
-        this._currentDirection == null
+        this.isCaching
     );
 
     children.add(
@@ -243,7 +246,7 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
         this._top,
         constraints,
         DeckItemType.top,
-        this._currentDirection == null
+        this.isCaching
     );
 
     children.add(
@@ -255,10 +258,10 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
     );
 
     final deckItemPrevious = this._dataSource.itemAt(
-        this._top - 1,
+        getPrevious(),
         constraints,
         DeckItemType.previous,
-        this._currentDirection == null
+        this.isCaching
     );
 
     children.add(
@@ -269,7 +272,7 @@ class WidgetDeckState extends State<WidgetDeck> with TickerProviderStateMixin {
           child: deckItemPrevious.child,
         )
     );
-
+    this.isCaching = false;
     return children;
   }
 
